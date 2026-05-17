@@ -1,0 +1,49 @@
+[project]
+name = "marine-router"
+version = "0.1.0"
+description = "Chart-aware A* marine route planning for the Salish Sea (NOAA ENC Region 15)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "Chris", email = "cbc76am@gmail.com"}]
+keywords = ["marine", "routing", "a-star", "noaa", "enc", "navigation", "signalk", "opencpn"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "shapely>=2.0",
+    "pyproj>=3.6",
+    "rasterio>=1.3",
+    "scipy>=1.10",
+    "aiohttp>=3.9",
+    # gdal is a hard dep but typically system-installed via python3-gdal.
+    # Listing it here would force pip to try to build pyogrio/gdal from source,
+    # which is a bad experience.  Documented in README + CONTRIBUTING.
+]
+
+[project.urls]
+Homepage = "https://github.com/cbc76am-hue/marine-router"
+Source = "https://github.com/cbc76am-hue/marine-router"
+Issues = "https://github.com/cbc76am-hue/marine-router/issues"
+
+[project.scripts]
+marine-router-build-nogo = "tolly_router.build_nogo:main"
+marine-router-build-graph = "tolly_router.build_graph:main"
+marine-router-route = "tolly_router.routing:main"
+marine-router-serve = "tolly_router.service:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tolly_router*"]

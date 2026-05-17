@@ -1,0 +1,7 @@
+marine-router
+Copyright 2026 Chris (cbc76am-hue)
+
+This product includes software developed at github.com/cbc76am-hue/marine-router
+and uses NOAA Electronic Navigational Charts (S-57) under their published
+licensing terms.  See https://nauticalcharts.noaa.gov for chart provenance
+and https://www.apache.org/licenses/LICENSE-2.0 for this project's license.

@@ -133,7 +133,19 @@ v1 supported set.
   or hand off to autopilot. Use the output as a draft you inspect on a
   chartplotter.
 
+## Used by
+
+- [boat-voice](https://github.com/cbc76am-hue/boat-voice) — a Gemini Live
+  voice assistant for a 1974 Tollycraft 34 — calls this service for
+  chart-aware route planning by name ("plan a route to Friday Harbor").
+
 ## Status
 
 v1, single-developer hobby project. Built against NOAA ENC charts current to
 2026-05. Acceptance suite passes 6/6 (`scripts/route.py --suite`).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, style notes,
+and open work.
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
