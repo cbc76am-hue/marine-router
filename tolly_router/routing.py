@@ -67,19 +67,34 @@ log = logging.getLogger(__name__)
 # Tunables (plan §5)
 # --------------------------------------------------------------------------
 
-PRUNE_PAD_M = 5000.0
+# Bbox prune: A* search is constrained to a rectangle around the straight-
+# line start→end with this much padding on every side.  Sized to cover
+# realistic Salish Sea routes where the actual path wraps around an
+# island (e.g. HOME → Padilla Bay is 6 nm straight but ~80 nm sailable
+# around the south end of Whidbey).  25 km pad accommodates Whidbey,
+# Camano, and Bainbridge wrap-arounds; broader scope routes (Hood Canal
+# bridge, BC border) may still feel the cap and surface a "route hugs
+# prune-bbox edge" warning.
+PRUNE_PAD_M = 25000.0
 SIMPLIFY_TOL_M = 100.0
-START_NUDGE_RADIUS_M = 1000.0
+# Nudge radius — how far the spiral search will reach to find a navigable
+# cell in the same connected basin as the other endpoint.  Sized for two
+# realistic cases:
+#   1. Named-harbor destinations (Friday Harbor, Anacortes) where the
+#      pier coord lands just inside a dock at 50 m resolution; observed
+#      offsets up to ~1 km.
+#   2. Marina/slip START coords (e.g. Shelter Bay, Edmonds) where the
+#      raster blocks the slip itself plus a narrow channel exit; the
+#      nearest navigable cell can be 1-3 km away.  At 3 km we cover
+#      virtually every marina in the Salish Sea while still refusing
+#      to plan routes from genuinely land-locked points (mid-Whidbey,
+#      mid-mainland) where the nudge would have to span >3 km.
+# Every nudge >0 raises a clear warning the caller sees ("start nudged
+# X m to nearest water at lat, lon"), so we don't silently move the
+# user's intent.
+START_NUDGE_RADIUS_M = 3000.0
 START_NUDGE_PREFERRED_M = 500.0     # don't warn if we found water within this
-# Destination nudge: named harbor coords (e.g. Friday Harbor pier at
-# 48.5363, -123.0168, Anacortes at 48.5167, -122.6131, Bremerton at
-# 47.5673, -122.6326) typically land just inside a pier at 50 m chart
-# resolution — observed offsets up to ~700 m.  Allowing a destination
-# nudge of the same magnitude as the start nudge lets realistic "route me
-# to <named harbor>" queries succeed, while obvious land-locked
-# destinations like mid-Whidbey-Island (~2 km from water) still get
-# refused per /home/boat/MARINE_ROUTING_PLAN.md §5c.
-END_NUDGE_RADIUS_M = 1000.0
+END_NUDGE_RADIUS_M = 3000.0
 EDGE_WARN_CELLS = 10
 MAX_ROUTE_NM = 100.0                # plan §5c hard limit
 SQRT2 = math.sqrt(2.0)

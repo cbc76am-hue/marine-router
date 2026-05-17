@@ -109,13 +109,28 @@ v1 supported set.
 `GET /health` — liveness + graph metadata.
 `POST /reload` — async swap to a freshly-built `data/graph.npz`.
 
-## Known limitations
+## Resolution + scope tuning
 
-- **50 m grid loses narrow channels.** Some maintained channels (e.g. Swinomish
-  out of Padilla Bay) are <50 m wide at points, which severs them in the
-  rasterized graph. Affected routes return `"start is in a water basin
-  disconnected from the destination"` rather than producing an unsafe path.
-  Adaptive resolution (25 m in known narrow passages) is a follow-up.
+The default graph build is 50 m / scope WGS84 (-124.5, 47.0, -122.0, 49.0).
+That keeps the resident memory ~80 MB and per-route A* under a couple of
+seconds. For tighter nearshore routing — narrow maintained channels like
+Swinomish, route planning from a marina slip — rebuild at 25 m:
+
+```bash
+python3 scripts/build_graph.py --resolution 25
+```
+
+Cost: graph build is ~13 s instead of 7 s; resident memory rises to
+~340 MB; per-route A* on wrap-around routes (HOME → Padilla via the
+south of Whidbey) is 5-15 s. Worth it if you boat from a slip; not
+necessary if you only route from offshore start points.
+
+The `PRUNE_PAD_M = 25000.0` and `START_NUDGE_RADIUS_M = END_NUDGE_RADIUS_M =
+3000.0` defaults are sized for the Salish Sea: 25 km prune accommodates
+wrap-around-Whidbey routes; 3 km nudge accommodates marina slips. Tune
+in `tolly_router/routing.py` for other scopes.
+
+## Known limitations
 
 - **Tides ignored.** Depths are at chart datum (MLLW). The service API
   accepts `departure_time` for forward compatibility; v1 does not consult tide
