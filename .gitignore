@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Pre-built routing graphs — regenerate via scripts/build_nogo.py + scripts/build_graph.py.
+data/*.npz
+data/*.geojson
+
+# Misc
+*.tmp
+*.swp
+.DS_Store
