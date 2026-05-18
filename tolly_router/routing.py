@@ -439,53 +439,64 @@ def _simplify_validated(path_local: List[Tuple[int, int]],
                         row_off: int, col_off: int,
                         tol_m: float,
                         nogo: np.ndarray) -> List[Tuple[float, float]]:
-    """Douglas-Peucker simplify in UTM, then validate each surviving leg's
-    Bresenham line against the full-grid ``nogo`` mask.  If a leg crosses
-    blocked cells, splice in the original grid-path cells between the
-    matching anchors so the public waypoint list never crosses land/hazards.
+    """Greedy string-pulling / visibility simplification of the A* grid path.
+
+    Walks the path forward.  From each anchor, looks as far ahead as possible
+    while the straight Bresenham line from anchor to candidate stays inside
+    navigable cells AND honors A*'s corner-cut rule.  Jumps to that farthest
+    candidate.  Repeats until the end is reached.
+
+    Replaces the old "Douglas-Peucker then splice raw cells on failure"
+    pipeline, which produced 30+°-per-leg zig-zag because the splice fallback
+    dumped dense 25 m grid stair-steps back into the public route around
+    narrows.  String-pulling gives a polyline that's both (1) provably never
+    crosses no-go, by construction, and (2) as straight as the geometry
+    allows — typically dropping waypoint counts 5-10× on open-water routes.
+
+    ``tol_m`` is kept in the signature for API compatibility but is unused;
+    the visibility check is the only constraint.
     """
     if len(path_local) <= 2:
         return _path_to_utm(path_local, transform, row_off, col_off)
 
-    utm_pts = _path_to_utm(path_local, transform, row_off, col_off)
-    simp_utm = _simplify_utm(utm_pts, tol_m)
-    if len(simp_utm) <= 1:
-        return simp_utm
+    n = len(path_local)
+    out_idxs: List[int] = [0]
+    i = 0
+    while i < n - 1:
+        # Binary search over the candidate window for the farthest visible
+        # index.  Visibility isn't strictly monotone (open->blocked->open is
+        # possible in some chart topologies) but it's nearly always monotone
+        # in practice, so binary search finds an answer ~log(n) faster than
+        # the linear scan, and we fall back to a short linear sweep around
+        # the boundary to catch the non-monotone case.
+        lo, hi = i + 1, n - 1
+        best = i + 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if _line_clear_grid(path_local[i], path_local[mid],
+                                nogo, row_off, col_off):
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        # Edge-case sweep: if there's a longer-reach visible point past
+        # ``best`` (non-monotone visibility), prefer it.
+        for j in range(best + 1, min(n, best + 8)):
+            if _line_clear_grid(path_local[i], path_local[j],
+                                nogo, row_off, col_off):
+                best = j
+        if best == i:
+            # Should never happen on a valid input path; guard against an
+            # infinite loop by walking one cell forward.
+            best = i + 1
+        out_idxs.append(best)
+        i = best
 
-    # Map each simplified UTM point back to its original path index.  DP
-    # preserves the input vertices, so each simplified point matches one
-    # cell-center in ``utm_pts`` within sub-meter tolerance.
-    simp_idxs: List[int] = []
-    last_i = 0
-    for e, n in simp_utm:
-        for i in range(last_i, len(utm_pts)):
-            ee, nn = utm_pts[i]
-            if abs(ee - e) < 0.5 and abs(nn - n) < 0.5:
-                simp_idxs.append(i)
-                last_i = i
-                break
-
-    # Validate every leg against the no-go raster; splice on failure.
-    out_idxs: List[int] = [simp_idxs[0]]
-    repaired = 0
-    for prev_i, cur_i in zip(simp_idxs[:-1], simp_idxs[1:]):
-        prev_cell = path_local[prev_i]
-        cur_cell = path_local[cur_i]
-        if _line_clear_grid(prev_cell, cur_cell, nogo, row_off, col_off):
-            out_idxs.append(cur_i)
-        else:
-            # Bad leg — fall back to the original grid path between these
-            # anchors.  This keeps the route navigable at the cost of more
-            # waypoints around the offending segment.
-            out_idxs.extend(range(prev_i + 1, cur_i + 1))
-            repaired += 1
-
-    if repaired:
-        log.debug("simplify: repaired %d leg(s) that crossed no-go cells "
-                  "(%d -> %d waypoints)",
-                  repaired, len(simp_idxs), len(out_idxs))
-
-    return [utm_pts[i] for i in out_idxs]
+    log.debug("simplify: %d input cells -> %d visibility waypoints",
+              n, len(out_idxs))
+    return [transform.cell_center_utm(path_local[k][0] + row_off,
+                                      path_local[k][1] + col_off)
+            for k in out_idxs]
 
 
 def _utm_to_waypoints(utm_pts: List[Tuple[float, float]]) -> List[Waypoint]:
