@@ -275,6 +275,14 @@
       "notes": "Edmonds public marina, Puget Sound east shore"
     },
     {
+      "name": "Port of Everett",
+      "aliases": ["everett", "everett marina", "port of everett marina"],
+      "lat": 48.0153,
+      "lon": -122.2105,
+      "region": "Central Puget Sound",
+      "notes": "Port of Everett Marina — guest moorage + fuel"
+    },
+    {
       "name": "Kingston",
       "aliases": ["kingston ferry", "kingston wa"],
       "lat": 47.7964,
