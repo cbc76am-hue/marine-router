@@ -81,6 +81,17 @@ log = logging.getLogger(__name__)
 # prune-bbox edge" warning.
 PRUNE_PAD_M = 25000.0
 SIMPLIFY_TOL_M = 100.0
+
+# Swinomish channel — the home channel for Tolly is too narrow to route
+# through at 25m raster resolution.  When the start lands inside this bbox,
+# we redirect to one of the two channel exits.  Picked by tidal current
+# (favorable along-track flow toward destination) when a CurrentField + a
+# departure_time are available; falls back to closer-by-great-circle.
+SWINOMISH_BBOX = (48.355, 48.470, -122.570, -122.500)   # lat_min, lat_max, lon_min, lon_max
+SWINOMISH_NORTH_EXIT = (48.46763, -122.52160)
+SWINOMISH_SOUTH_EXIT = (48.36131, -122.55659)
+SWINOMISH_EXIT_PROXIMITY_NM = 0.4  # if start already within this distance of an exit, leave it alone
+SWINOMISH_CURRENT_TIE_BREAK_MS = 0.15  # ~0.3 kt — below this, currents are too weak to drive the pick
 # Nudge radius — how far the spiral search will reach to find a navigable
 # cell in the same connected basin as the other endpoint.  Sized for two
 # realistic cases:
@@ -117,6 +128,104 @@ _NEIGHBORS_8: Tuple[Tuple[int, int, float], ...] = (
 )
 
 
+def _bearing_deg(lat1: float, lon1: float,
+                 lat2: float, lon2: float) -> float:
+    """Initial great-circle bearing from (lat1, lon1) to (lat2, lon2), in
+    degrees true (0=N, 90=E)."""
+    rlat1 = math.radians(lat1)
+    rlat2 = math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    x = math.sin(dlon) * math.cos(rlat2)
+    y = (math.cos(rlat1) * math.sin(rlat2)
+         - math.sin(rlat1) * math.cos(rlat2) * math.cos(dlon))
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+def _in_swinomish_bbox(lat: float, lon: float) -> bool:
+    lat_min, lat_max, lon_min, lon_max = SWINOMISH_BBOX
+    return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
+
+
+def _resolve_swinomish_origin(
+    start: Tuple[float, float],
+    end: Tuple[float, float],
+    departure_time: Optional[datetime] = None,
+    current_field: Optional[CurrentField] = None,
+) -> Optional[Tuple[Tuple[float, float], str, str]]:
+    """If ``start`` is inside the Swinomish channel polygon, pick the better
+    exit and return ``(new_start, exit_name, warning_text)``.  Otherwise None.
+
+    Pick is current-driven when ``current_field`` + ``departure_time`` are
+    available (favorable along-track flow toward destination); falls back to
+    closer-exit-by-great-circle.
+    """
+    start_lat, start_lon = start
+    end_lat, end_lon = end
+
+    if not _in_swinomish_bbox(start_lat, start_lon):
+        return None
+
+    # Already sitting at one of the exits — no redirect.
+    for exit_lat, exit_lon in (SWINOMISH_NORTH_EXIT, SWINOMISH_SOUTH_EXIT):
+        if haversine_nm(start_lat, start_lon, exit_lat, exit_lon) < SWINOMISH_EXIT_PROXIMITY_NM:
+            return None
+
+    # Default pick: closer exit by great-circle distance to destination.
+    dist_n_nm = haversine_nm(SWINOMISH_NORTH_EXIT[0], SWINOMISH_NORTH_EXIT[1],
+                             end_lat, end_lon)
+    dist_s_nm = haversine_nm(SWINOMISH_SOUTH_EXIT[0], SWINOMISH_SOUTH_EXIT[1],
+                             end_lat, end_lon)
+    pick = "north" if dist_n_nm <= dist_s_nm else "south"
+    reason = (f"{min(dist_n_nm, dist_s_nm):.1f} nm vs "
+              f"{max(dist_n_nm, dist_s_nm):.1f} nm by distance")
+    pick_basis = "distance"
+
+    # Current-driven override when we have both inputs.
+    if current_field is not None and departure_time is not None:
+        try:
+            pts = np.array(
+                [list(SWINOMISH_NORTH_EXIT), list(SWINOMISH_SOUTH_EXIT)],
+                dtype=np.float64,
+            )
+            uv = current_field.field_at(pts, departure_time)  # [2, 2] m/s
+
+            brg_n = _bearing_deg(SWINOMISH_NORTH_EXIT[0], SWINOMISH_NORTH_EXIT[1],
+                                 end_lat, end_lon)
+            brg_s = _bearing_deg(SWINOMISH_SOUTH_EXIT[0], SWINOMISH_SOUTH_EXIT[1],
+                                 end_lat, end_lon)
+
+            # Along-track current in m/s — positive = current is pushing us
+            # toward the destination from this exit.  u is east, v is north;
+            # heading unit vector is (sin(brg), cos(brg)).
+            def along_track_ms(brg, u, v):
+                rad = math.radians(brg)
+                return u * math.sin(rad) + v * math.cos(rad)
+
+            along_n = along_track_ms(brg_n, float(uv[0, 0]), float(uv[0, 1]))
+            along_s = along_track_ms(brg_s, float(uv[1, 0]), float(uv[1, 1]))
+
+            if abs(along_n - along_s) > SWINOMISH_CURRENT_TIE_BREAK_MS:
+                if along_n > along_s:
+                    pick = "north"
+                    reason = (f"{along_n * MS_TO_KTS:+.1f} kt with us at north "
+                              f"vs {along_s * MS_TO_KTS:+.1f} kt at south")
+                else:
+                    pick = "south"
+                    reason = (f"{along_s * MS_TO_KTS:+.1f} kt with us at south "
+                              f"vs {along_n * MS_TO_KTS:+.1f} kt at north")
+                pick_basis = "current"
+        except Exception as e:
+            log.warning(
+                "Swinomish current-driven pick failed (%s); using distance",
+                e,
+            )
+
+    new_start = SWINOMISH_NORTH_EXIT if pick == "north" else SWINOMISH_SOUTH_EXIT
+    warning = (f"start was inside Swinomish; routed from {pick} channel exit "
+               f"({pick_basis}: {reason})")
+    return new_start, pick, warning
+
+
 # --------------------------------------------------------------------------
 # Public dataclasses
 # --------------------------------------------------------------------------
@@ -143,13 +252,15 @@ class RouteResult:
     # Diagnostics (not part of the public API contract; useful for the CLI).
     runtime_s: float = 0.0
     nodes_expanded: int = 0
-    # v2 (spatio-temporal) fields, populated only when optimize != "safe".
+    # Spatio-temporal fields, populated only when optimize != "safe".
     optimize_mode: Optional[str] = None
     departure_time: Optional[str] = None     # ISO8601 UTC
     arrival_time: Optional[str] = None       # ISO8601 UTC
     duration_minutes: Optional[float] = None
     fuel_gallons: Optional[float] = None
     legs: Optional[List[Dict[str, Any]]] = None
+    # Surfaced when start was inside Swinomish and got redirected to an exit.
+    auto_exit: Optional[str] = None          # "north" | "south" | None
 
 
 # --------------------------------------------------------------------------
@@ -858,6 +969,12 @@ class Router:
         ``route_time``.
         """
         t0 = time.perf_counter()
+        # Swinomish-origin redirect (distance-only on this path; no currents).
+        auto_exit: Optional[str] = None
+        swin_warning: Optional[str] = None
+        swin = _resolve_swinomish_origin(start, end)
+        if swin is not None:
+            start, auto_exit, swin_warning = swin
         start_lat, start_lon = start
         end_lat, end_lon = end
 
@@ -1046,6 +1163,9 @@ class Router:
 
         distance_nm = _waypoints_distance_nm(wps)
 
+        if swin_warning is not None:
+            warnings_out.insert(0, swin_warning)
+
         result = RouteResult(
             ok=True,
             waypoints=wps,
@@ -1056,6 +1176,7 @@ class Router:
             error=None,
             runtime_s=time.perf_counter() - t0,
             nodes_expanded=nodes_expanded,
+            auto_exit=auto_exit,
         )
         log.debug("route ok: %.1f nm, %d wps, %d nodes expanded in %.2fs",
                   distance_nm, len(wps), nodes_expanded, result.runtime_s)
@@ -1090,6 +1211,25 @@ class Router:
         polar = polar if polar is not None else VesselPolar.load()
         stw_kts = float(polar.cruise_stw_kts)
         stw_ms = stw_kts * KTS_TO_MS
+
+        # Resolve current_field early so the Swinomish picker has it.
+        try:
+            field_obj = (current_field if current_field is not None
+                         else get_default_field())
+        except (ValueError, OSError) as e:
+            return RouteResult(ok=False,
+                               error=f"tidal-current data unavailable: {e}",
+                               runtime_s=time.perf_counter() - t0,
+                               optimize_mode=optimize)
+
+        # Swinomish-origin redirect — current-driven when possible.
+        auto_exit: Optional[str] = None
+        swin_warning: Optional[str] = None
+        swin = _resolve_swinomish_origin(start, end,
+                                         departure_time=departure_time,
+                                         current_field=field_obj)
+        if swin is not None:
+            start, auto_exit, swin_warning = swin
 
         # ---- shared prep (validation, nudges, prune bbox) ----
         prep = self._prepare_search(start, end, t0)
@@ -1142,17 +1282,7 @@ class Router:
         ds_latlon[:, 0] = lat_arr
         ds_latlon[:, 1] = lon_arr
 
-        try:
-            field_obj = (current_field if current_field is not None
-                         else get_default_field())
-        except (ValueError, OSError) as e:
-            # Empty station catalog (offline install / cold cache) or NOAA
-            # unreachable.  Surface as a clean ok=false instead of a 500.
-            return RouteResult(ok=False,
-                               error=f"tidal-current data unavailable: {e}",
-                               warnings=warnings_out,
-                               runtime_s=time.perf_counter() - t0,
-                               optimize_mode=optimize)
+        # field_obj resolved above (before Swinomish redirect).  Reuse here.
         # Tensor shape: [T, ds_h, ds_w, 2].  Each slice is the IDW field at
         # a fixed time over the down-sampled cells.
         cf_tensor = np.zeros((n_steps, ds_h, ds_w, 2), dtype=np.float32)
@@ -1244,6 +1374,9 @@ class Router:
         fuel_gal = fuel_rate_gph * duration_h
         arrival = departure_time + timedelta(seconds=total_s)
 
+        if swin_warning is not None:
+            warnings_out.insert(0, swin_warning)
+
         result = RouteResult(
             ok=True,
             waypoints=wps,
@@ -1262,6 +1395,7 @@ class Router:
             duration_minutes=round(total_s / 60.0, 2),
             fuel_gallons=round(fuel_gal, 3),
             legs=legs,
+            auto_exit=auto_exit,
         )
         log.debug("route_time(%s) ok: %.1f nm, %.1f min, %d wps; "
                   "field=%.2fs astar=%.2fs total=%.2fs",

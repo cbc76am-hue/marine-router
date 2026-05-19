@@ -1,0 +1,366 @@
+{
+  "version": 1,
+  "notes": "Salish Sea destinations with NOAA-charted harbor-entrance / approach coordinates. Coords are mid-channel water positions; the router still validates against the navigability raster.",
+  "destinations": [
+    {
+      "name": "Swinomish South Exit",
+      "aliases": ["south exit", "south channel exit", "skagit bay exit", "swinomish south", "south swinomish"],
+      "lat": 48.36131,
+      "lon": -122.55659,
+      "region": "Skagit Bay",
+      "notes": "Swinomish Channel south entrance, Skagit Bay side. Use as start for south-of-Whidbey destinations."
+    },
+    {
+      "name": "Swinomish North Exit",
+      "aliases": ["north exit", "north channel exit", "padilla bay exit", "swinomish north", "north swinomish", "march point"],
+      "lat": 48.46763,
+      "lon": -122.52160,
+      "region": "Padilla Bay",
+      "notes": "Swinomish Channel north entrance, Padilla Bay / March Point side. Use as start for all northbound or westbound San Juan / Rosario destinations."
+    },
+    {
+      "name": "Shelter Bay Marina",
+      "aliases": ["home", "shelter bay", "the slip", "the dock", "the marina"],
+      "lat": 48.38062,
+      "lon": -122.51490,
+      "region": "Swinomish Channel",
+      "notes": "Tolly's home port; INSIDE the Swinomish channel. Not directly routable at 25m raster; router auto-routes to nearest channel exit."
+    },
+    {
+      "name": "Friday Harbor",
+      "aliases": ["fh", "san juan town", "san juan island", "friday harbor ferry"],
+      "lat": 48.5363,
+      "lon": -123.0168,
+      "region": "San Juans",
+      "notes": "Main San Juan Island ferry terminal + customs port"
+    },
+    {
+      "name": "Roche Harbor",
+      "aliases": ["roche", "roche harbor resort", "northwest san juan"],
+      "lat": 48.612,
+      "lon": -123.158,
+      "region": "San Juans",
+      "notes": "Resort marina on NW San Juan Island; entry via Mosquito Pass or Spieden Channel"
+    },
+    {
+      "name": "Garrison Bay",
+      "aliases": ["english camp", "garrison"],
+      "lat": 48.5839,
+      "lon": -123.1525,
+      "region": "San Juans",
+      "notes": "English Camp / Garrison Bay anchorage, west San Juan Island"
+    },
+    {
+      "name": "Eastsound",
+      "aliases": ["east sound", "orcas town", "orcas village", "eastsound orcas"],
+      "lat": 48.6953,
+      "lon": -122.9039,
+      "region": "San Juans",
+      "notes": "Orcas Island village at the head of East Sound (north shore)"
+    },
+    {
+      "name": "Deer Harbor",
+      "aliases": ["deer harbour"],
+      "lat": 48.6178,
+      "lon": -123.0028,
+      "region": "San Juans",
+      "notes": "Marina on SW Orcas Island"
+    },
+    {
+      "name": "West Sound",
+      "aliases": ["west sound orcas"],
+      "lat": 48.6306,
+      "lon": -122.9608,
+      "region": "San Juans",
+      "notes": "Anchorage in West Sound, central Orcas Island"
+    },
+    {
+      "name": "Rosario Resort",
+      "aliases": ["rosario", "rosario orcas"],
+      "lat": 48.6433,
+      "lon": -122.8714,
+      "region": "San Juans",
+      "notes": "Resort on E side of Orcas Island, East Sound"
+    },
+    {
+      "name": "Olga",
+      "aliases": ["olga orcas"],
+      "lat": 48.6233,
+      "lon": -122.8089,
+      "region": "San Juans",
+      "notes": "Hamlet on east side of Orcas Island, Buck Bay"
+    },
+    {
+      "name": "Shaw Island Ferry",
+      "aliases": ["shaw", "shaw island", "shaw landing"],
+      "lat": 48.585,
+      "lon": -122.93,
+      "region": "San Juans",
+      "notes": "Shaw Island ferry landing"
+    },
+    {
+      "name": "Lopez Village",
+      "aliases": ["lopez", "fisherman bay", "lopez town"],
+      "lat": 48.4781,
+      "lon": -122.9078,
+      "region": "San Juans",
+      "notes": "Lopez Island village marina (Fisherman Bay entrance)"
+    },
+    {
+      "name": "Spencer Spit",
+      "aliases": ["spencer spit lopez"],
+      "lat": 48.5350,
+      "lon": -122.8525,
+      "region": "San Juans",
+      "notes": "Marine state park anchorage, NE Lopez Island"
+    },
+    {
+      "name": "Hunter Bay",
+      "aliases": ["hunter bay lopez", "lopez southeast"],
+      "lat": 48.4639,
+      "lon": -122.8442,
+      "region": "San Juans",
+      "notes": "SE Lopez Island anchorage"
+    },
+    {
+      "name": "Reid Harbor",
+      "aliases": ["stuart island", "stuart", "reid harbour"],
+      "lat": 48.6864,
+      "lon": -123.1981,
+      "region": "San Juans",
+      "notes": "Stuart Island state park, Reid Harbor entrance"
+    },
+    {
+      "name": "Sucia Island",
+      "aliases": ["sucia", "fossil bay", "echo bay sucia"],
+      "lat": 48.7558,
+      "lon": -122.9011,
+      "region": "San Juans",
+      "notes": "Sucia Island marine state park, Fossil Bay entrance"
+    },
+    {
+      "name": "Matia Island",
+      "aliases": ["matia", "rolfe cove"],
+      "lat": 48.7506,
+      "lon": -122.8514,
+      "region": "San Juans",
+      "notes": "Matia Island marine state park, Rolfe Cove"
+    },
+    {
+      "name": "Patos Island",
+      "aliases": ["patos", "patos light"],
+      "lat": 48.7889,
+      "lon": -122.9647,
+      "region": "San Juans",
+      "notes": "Patos Island marine state park, NW corner of San Juans"
+    },
+    {
+      "name": "Jones Island",
+      "aliases": ["jones"],
+      "lat": 48.6217,
+      "lon": -123.0436,
+      "region": "San Juans",
+      "notes": "Jones Island marine state park"
+    },
+    {
+      "name": "Cap Sante Marina",
+      "aliases": ["cap sante", "anacortes marina", "anacortes city marina", "anacortes"],
+      "lat": 48.5198,
+      "lon": -122.6004,
+      "region": "Anacortes",
+      "notes": "Anacortes municipal marina"
+    },
+    {
+      "name": "Skyline Marina",
+      "aliases": ["skyline", "anacortes skyline"],
+      "lat": 48.5040,
+      "lon": -122.6837,
+      "region": "Anacortes",
+      "notes": "West Anacortes marina, Burrows Bay"
+    },
+    {
+      "name": "Anacortes Ferry",
+      "aliases": ["anacortes ferry terminal"],
+      "lat": 48.5061,
+      "lon": -122.6802,
+      "region": "Anacortes",
+      "notes": "WSDOT ferry terminal — San Juans + Sidney BC departures"
+    },
+    {
+      "name": "Eagle Harbor Cypress",
+      "aliases": ["eagle harbor cypress island", "cypress eagle harbor"],
+      "lat": 48.5750,
+      "lon": -122.7194,
+      "region": "Rosario Strait",
+      "notes": "Cypress Island anchorage"
+    },
+    {
+      "name": "Squalicum Harbor",
+      "aliases": ["bellingham", "squalicum", "bellingham marina"],
+      "lat": 48.7575,
+      "lon": -122.5089,
+      "region": "Bellingham",
+      "notes": "Bellingham's main port; Squalicum Harbor"
+    },
+    {
+      "name": "Fairhaven",
+      "aliases": ["fairhaven harbor", "south bellingham"],
+      "lat": 48.7194,
+      "lon": -122.5097,
+      "region": "Bellingham",
+      "notes": "Bellingham south harbor — Bellingham Cruise Terminal area"
+    },
+    {
+      "name": "Coupeville",
+      "aliases": ["penn cove", "coupeville whidbey"],
+      "lat": 48.2167,
+      "lon": -122.6833,
+      "region": "Whidbey",
+      "notes": "Coupeville town wharf, Penn Cove"
+    },
+    {
+      "name": "Langley",
+      "aliases": ["langley whidbey", "south whidbey"],
+      "lat": 48.0386,
+      "lon": -122.4072,
+      "region": "Whidbey",
+      "notes": "Langley marina, south Whidbey east shore"
+    },
+    {
+      "name": "Oak Harbor",
+      "aliases": ["oak harbour"],
+      "lat": 48.2939,
+      "lon": -122.6500,
+      "region": "Whidbey",
+      "notes": "Oak Harbor marina, north Whidbey"
+    },
+    {
+      "name": "Cornet Bay",
+      "aliases": ["deception pass marina", "cornet"],
+      "lat": 48.3958,
+      "lon": -122.6303,
+      "region": "Whidbey",
+      "notes": "Cornet Bay marina just south of Deception Pass"
+    },
+    {
+      "name": "Port Townsend",
+      "aliases": ["pt", "port townsend boat haven"],
+      "lat": 48.1175,
+      "lon": -122.7625,
+      "region": "Port Townsend",
+      "notes": "Port Townsend Boat Haven Marina"
+    },
+    {
+      "name": "Point Hudson",
+      "aliases": ["point hudson marina", "pt hudson"],
+      "lat": 48.1217,
+      "lon": -122.7517,
+      "region": "Port Townsend",
+      "notes": "Point Hudson Marina, Port Townsend (NE side)"
+    },
+    {
+      "name": "Hood Canal Bridge",
+      "aliases": ["hood canal", "hood canal bridge entrance"],
+      "lat": 47.8553,
+      "lon": -122.6275,
+      "region": "Hood Canal",
+      "notes": "Entry to Hood Canal at the floating bridge"
+    },
+    {
+      "name": "Edmonds",
+      "aliases": ["edmonds marina", "edmonds harbor"],
+      "lat": 47.8108,
+      "lon": -122.3886,
+      "region": "Central Puget Sound",
+      "notes": "Edmonds public marina, Puget Sound east shore"
+    },
+    {
+      "name": "Kingston",
+      "aliases": ["kingston ferry", "kingston wa"],
+      "lat": 47.7964,
+      "lon": -122.4969,
+      "region": "Central Puget Sound",
+      "notes": "Kingston ferry landing, Kitsap Peninsula"
+    },
+    {
+      "name": "Shilshole Marina",
+      "aliases": ["shilshole", "seattle north marina", "ballard marina"],
+      "lat": 47.6781,
+      "lon": -122.4083,
+      "region": "Seattle",
+      "notes": "Shilshole Bay Marina, north Seattle (Ballard)"
+    },
+    {
+      "name": "Bell Harbor",
+      "aliases": ["bell harbor seattle", "seattle waterfront", "downtown seattle"],
+      "lat": 47.6109,
+      "lon": -122.3431,
+      "region": "Seattle",
+      "notes": "Bell Harbor Marina, downtown Seattle waterfront"
+    },
+    {
+      "name": "Eagle Harbor Bainbridge",
+      "aliases": ["bainbridge", "bainbridge island", "winslow"],
+      "lat": 47.6219,
+      "lon": -122.5147,
+      "region": "Bainbridge",
+      "notes": "Eagle Harbor, Bainbridge Island, ferry terminal town"
+    },
+    {
+      "name": "Bremerton",
+      "aliases": ["bremerton boat haven", "bremerton marina"],
+      "lat": 47.5694,
+      "lon": -122.6275,
+      "region": "Kitsap",
+      "notes": "Bremerton Boat Haven, Sinclair Inlet"
+    },
+    {
+      "name": "Poulsbo",
+      "aliases": ["liberty bay", "poulsbo marina"],
+      "lat": 47.7322,
+      "lon": -122.6444,
+      "region": "Kitsap",
+      "notes": "Poulsbo marina, Liberty Bay"
+    },
+    {
+      "name": "Tacoma",
+      "aliases": ["foss waterway", "tacoma marina", "tacoma waterway"],
+      "lat": 47.2592,
+      "lon": -122.4356,
+      "region": "South Sound",
+      "notes": "Foss Waterway, Tacoma"
+    },
+    {
+      "name": "Gig Harbor",
+      "aliases": ["gig"],
+      "lat": 47.3389,
+      "lon": -122.5811,
+      "region": "South Sound",
+      "notes": "Gig Harbor entrance, west of Tacoma"
+    },
+    {
+      "name": "Olympia",
+      "aliases": ["percival landing", "olympia marina"],
+      "lat": 47.0511,
+      "lon": -122.9028,
+      "region": "South Sound",
+      "notes": "Percival Landing, Olympia (south end of Puget Sound)"
+    },
+    {
+      "name": "Port Angeles",
+      "aliases": ["pa", "port angeles harbor"],
+      "lat": 48.1183,
+      "lon": -123.4283,
+      "region": "Strait of Juan de Fuca",
+      "notes": "Port Angeles, Olympic Peninsula"
+    },
+    {
+      "name": "John Wayne Marina",
+      "aliases": ["sequim", "john wayne", "sequim marina"],
+      "lat": 48.0789,
+      "lon": -123.0367,
+      "region": "Strait of Juan de Fuca",
+      "notes": "John Wayne Marina, Sequim Bay"
+    }
+  ]
+}
