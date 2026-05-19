@@ -1,6 +1,6 @@
 """aiohttp HTTP service wrapping ``Router``.
 
-Endpoints (spec: /home/boat/MARINE_ROUTING_PLAN.md §6):
+Endpoints:
 
 * ``POST /route``    — plan a route.  200 on success or recoverable error.
                        400 only for malformed JSON / missing fields / unsupported
@@ -9,15 +9,19 @@ Endpoints (spec: /home/boat/MARINE_ROUTING_PLAN.md §6):
 * ``POST /reload``   — re-read ``data/graph.npz`` from disk in the background.
                        Returns 202 immediately; new ``Router`` swaps in atomically.
 
-Design notes:
+One Python process, one ``Router`` instance, shared across handlers.
+``Router.route`` is CPU-bound; we run it via ``asyncio.to_thread`` so the
+event loop stays responsive.  The ``Router`` reference is guarded by an
+``asyncio.Lock`` during ``/reload``; reads pick up the new instance, in-flight
+``route`` calls keep their captured reference.  Listens on ``127.0.0.1:8090``;
+local-only, no auth.
 
-* One Python process, one ``Router`` instance, shared across handlers.
-* ``Router.route`` is CPU-bound 1-3 s of pure-Python A*; we run it via
-  ``asyncio.to_thread`` so the event loop stays responsive to ``/health`` etc.
-* The ``Router`` reference is guarded by an ``asyncio.Lock`` during ``/reload``
-  swap.  Reads after the swap pick up the new instance; in-flight ``route``
-  calls keep their captured reference (no in-flight invalidation needed).
-* Listens on ``127.0.0.1:8090``; local-only, no auth.
+Optimize modes:
+
+* ``safe`` — distance-optimal A*; ignores currents.
+* ``time`` / ``fuel`` — spatio-temporal A* against tidal currents.
+* ``depart_window`` — sweep candidate departure times in ``time`` mode and
+  return the best.
 """
 from __future__ import annotations
 
@@ -25,11 +29,14 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
 
+from .currents import CurrentField
+from .polar import VesselPolar
 from .routing import RouteResult, Router
 
 log = logging.getLogger(__name__)
@@ -45,9 +52,10 @@ DEFAULT_GRAPH = Path(__file__).resolve().parent.parent / "data" / "graph.npz"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8090
 
-SUPPORTED_OPTIMIZE = {"safe"}
-# Reject loudly — these are spec'd but not yet implemented.
-RESERVED_OPTIMIZE = {"time", "fuel", "depart_window"}
+SUPPORTED_OPTIMIZE = {"safe", "time", "fuel", "depart_window"}
+
+# 24 candidates × ~6 s/route ≈ 2.5 min worst-case wall time for a 10 nm route.
+DEPART_WINDOW_MAX_SWEEPS = 24
 
 APP_STARTED_KEY = web.AppKey("started_monotonic", float)
 # The Router reference lives inside a one-slot mutable container so the
@@ -76,10 +84,11 @@ def _set_router(app: web.Application, router: Router) -> Optional[Router]:
 # --------------------------------------------------------------------------
 
 def _result_to_public_json(r: RouteResult) -> Dict[str, Any]:
-    """Convert a ``RouteResult`` into the public JSON shape (plan §6).
+    """Convert a ``RouteResult`` into the public JSON shape.
 
-    Strips diagnostic fields (``runtime_s``, ``nodes_expanded``) — those
-    live behind ``GET /diagnostics`` instead.
+    Strips diagnostic fields (``runtime_s``, ``nodes_expanded``); those live
+    behind ``GET /diagnostics``.  Time-aware fields are added only when the
+    result populated them — ``safe`` responses are unchanged.
     """
     if not r.ok:
         # Per spec: failure is 200 with ok=false so the caller can render
@@ -87,8 +96,10 @@ def _result_to_public_json(r: RouteResult) -> Dict[str, Any]:
         out: Dict[str, Any] = {"ok": False, "error": r.error or "unknown error"}
         if r.warnings:
             out["warnings"] = list(r.warnings)
+        if r.optimize_mode:
+            out["optimize_mode"] = r.optimize_mode
         return out
-    return {
+    out = {
         "ok": True,
         "waypoints": [
             {"lat": w.lat, "lon": w.lon, "name": w.name}
@@ -101,6 +112,31 @@ def _result_to_public_json(r: RouteResult) -> Dict[str, Any]:
         "hazards_near": r.hazards_near,
         "warnings": list(r.warnings),
     }
+    if r.optimize_mode is not None:
+        out["optimize_mode"] = r.optimize_mode
+        if r.departure_time is not None:
+            out["departure_time"] = r.departure_time
+        if r.arrival_time is not None:
+            out["arrival_time"] = r.arrival_time
+        if r.duration_minutes is not None:
+            out["duration_minutes"] = r.duration_minutes
+        if r.fuel_gallons is not None:
+            out["fuel_gallons"] = r.fuel_gallons
+        if r.legs is not None:
+            out["legs"] = r.legs
+    return out
+
+
+def _parse_iso8601(s: str) -> datetime:
+    """Parse an ISO8601 timestamp, accepting trailing 'Z'.  Naive input is
+    treated as UTC.  Raises ValueError on bad format."""
+    if not isinstance(s, str):
+        raise ValueError(f"expected ISO8601 string, got {type(s).__name__}")
+    txt = s.strip().replace("Z", "+00:00")
+    dt = datetime.fromisoformat(txt)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _result_to_diagnostics(r: RouteResult) -> Dict[str, Any]:
@@ -174,14 +210,12 @@ async def handle_route(request: web.Request) -> web.Response:
     if not isinstance(optimize, str):
         return web.json_response(
             {"error": "optimize must be a string"}, status=400)
-    if optimize in RESERVED_OPTIMIZE:
-        return web.json_response(
-            {"error": "optimize value not supported in v1"}, status=400)
     if optimize not in SUPPORTED_OPTIMIZE:
         return web.json_response(
             {"error": f"unknown optimize value: {optimize!r}"}, status=400)
 
-    departure_time = body.get("departure_time")
+    departure_time_raw = body.get("departure_time")
+    depart_window = body.get("depart_window")
 
     router = _get_router(request.app)
     if router is None:
@@ -190,37 +224,199 @@ async def handle_route(request: web.Request) -> web.Response:
         return web.json_response(
             {"ok": False, "error": "graph not loaded"}, status=503)
 
-    # Router.route is CPU-bound 1-3 s; push it off the event loop.
+    # ---- dispatch by optimize mode -------------------------------------
     t0 = time.perf_counter()
-    result: RouteResult = await asyncio.to_thread(
-        router.route,
-        (start_lat, start_lon),
-        (end_lat, end_lon),
-        departure_time=departure_time,
-        optimize=optimize,
-    )
-    wall_s = time.perf_counter() - t0
 
-    # Stash diagnostics for the /diagnostics endpoint (last route only).
+    if optimize == "safe":
+        result: RouteResult = await asyncio.to_thread(
+            router.route,
+            (start_lat, start_lon),
+            (end_lat, end_lon),
+            departure_time=departure_time_raw,
+            optimize=optimize,
+        )
+        wall_s = time.perf_counter() - t0
+        request.app[LAST_DIAG_KEY].clear()
+        request.app[LAST_DIAG_KEY].update({
+            **_result_to_diagnostics(result),
+            "wall_time_s": round(wall_s, 4),
+            "request": {
+                "start": {"lat": start_lat, "lon": start_lon},
+                "end": {"lat": end_lat, "lon": end_lon},
+                "optimize": optimize,
+                "departure_time": departure_time_raw,
+            },
+        })
+        log.debug("route safe %s: ok=%s err=%r dist=%.2f wps=%d nodes=%d wall=%.2fs",
+                  f"{start_lat:.4f},{start_lon:.4f}->{end_lat:.4f},{end_lon:.4f}",
+                  result.ok, result.error,
+                  result.distance_nm if result.ok else 0.0,
+                  len(result.waypoints), result.nodes_expanded, wall_s)
+        return web.json_response(_result_to_public_json(result), status=200)
+
+    if optimize in ("time", "fuel"):
+        # departure_time defaults to "now" if missing.
+        try:
+            dt = (_parse_iso8601(departure_time_raw)
+                  if departure_time_raw else datetime.now(timezone.utc))
+        except ValueError as e:
+            return web.json_response(
+                {"error": f"departure_time invalid: {e}"}, status=400)
+        result = await asyncio.to_thread(
+            router.route_time,
+            (start_lat, start_lon),
+            (end_lat, end_lon),
+            departure_time=dt,
+            optimize=optimize,
+        )
+        wall_s = time.perf_counter() - t0
+        request.app[LAST_DIAG_KEY].clear()
+        request.app[LAST_DIAG_KEY].update({
+            **_result_to_diagnostics(result),
+            "wall_time_s": round(wall_s, 4),
+            "request": {
+                "start": {"lat": start_lat, "lon": start_lon},
+                "end": {"lat": end_lat, "lon": end_lon},
+                "optimize": optimize,
+                "departure_time": dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        })
+        log.debug("route %s %s: ok=%s err=%r dist=%.2f dur=%.1fmin "
+                  "wps=%d wall=%.2fs",
+                  optimize,
+                  f"{start_lat:.4f},{start_lon:.4f}->{end_lat:.4f},{end_lon:.4f}",
+                  result.ok, result.error,
+                  result.distance_nm if result.ok else 0.0,
+                  result.duration_minutes or 0.0,
+                  len(result.waypoints), wall_s)
+        return web.json_response(_result_to_public_json(result), status=200)
+
+    # optimize == "depart_window"
+    if not isinstance(depart_window, dict):
+        return web.json_response(
+            {"error": "depart_window requires {earliest, latest, step_minutes}"},
+            status=400)
+    try:
+        earliest = _parse_iso8601(depart_window["earliest"])
+        latest = _parse_iso8601(depart_window["latest"])
+    except (KeyError, ValueError) as e:
+        return web.json_response(
+            {"error": f"depart_window earliest/latest invalid: {e}"},
+            status=400)
+    try:
+        step_minutes = int(depart_window.get("step_minutes", 15))
+    except (TypeError, ValueError):
+        return web.json_response(
+            {"error": "depart_window.step_minutes must be an integer"},
+            status=400)
+    if step_minutes < 1:
+        return web.json_response(
+            {"error": "step_minutes must be >= 1"}, status=400)
+    if latest <= earliest:
+        return web.json_response(
+            {"error": "depart_window latest must be after earliest"}, status=400)
+
+    span_min = (latest - earliest).total_seconds() / 60.0
+    n_sweeps = int(span_min // step_minutes) + 1
+    n_sweeps = max(1, min(n_sweeps, DEPART_WINDOW_MAX_SWEEPS))
+
+    try:
+        field = await asyncio.to_thread(CurrentField.from_default_catalog)
+    except (ValueError, OSError) as e:
+        return web.json_response(
+            {"ok": False, "optimize_mode": "depart_window",
+             "error": f"tidal-current data unavailable: {e}"},
+            status=200)
+    polar = VesselPolar.load()
+
+    results: List[Tuple[datetime, RouteResult]] = []
+    for i in range(n_sweeps):
+        dt_i = earliest + timedelta(minutes=i * step_minutes)
+        ri: RouteResult = await asyncio.to_thread(
+            router.route_time,
+            (start_lat, start_lon),
+            (end_lat, end_lon),
+            departure_time=dt_i,
+            optimize="time",
+            current_field=field,
+            polar=polar,
+        )
+        results.append((dt_i, ri))
+
+    successes = [(dt_i, ri) for dt_i, ri in results if ri.ok]
+    wall_s = time.perf_counter() - t0
+    if not successes:
+        # All failed (probably out-of-coverage / no path).  Surface the
+        # first error so the caller has something to render.
+        first_err = next(ri.error for _, ri in results if not ri.ok)
+        request.app[LAST_DIAG_KEY].clear()
+        request.app[LAST_DIAG_KEY].update({
+            "ok": False, "wall_time_s": round(wall_s, 4),
+            "candidates_evaluated": len(results),
+            "first_error": first_err,
+        })
+        return web.json_response(
+            {"ok": False, "optimize_mode": "depart_window",
+             "candidates_evaluated": len(results),
+             "error": first_err},
+            status=200)
+
+    # Best = smallest duration_minutes.  Ties broken by earlier departure.
+    successes.sort(key=lambda x: (x[1].duration_minutes or float("inf"),
+                                   x[0]))
+    best_dt, best = successes[0]
+    others = successes[1:]
+
+    body_out = {
+        "ok": True,
+        "optimize_mode": "depart_window",
+        "candidates_evaluated": len(results),
+        "best": {
+            "departure_time": best.departure_time,
+            "arrival_time": best.arrival_time,
+            "duration_minutes": best.duration_minutes,
+            "fuel_gallons": best.fuel_gallons,
+            "distance_nm": round(best.distance_nm, 3),
+            "waypoints": [
+                {"lat": w.lat, "lon": w.lon, "name": w.name}
+                if w.name is not None
+                else {"lat": w.lat, "lon": w.lon}
+                for w in best.waypoints
+            ],
+            "hazards_near": best.hazards_near,
+            "warnings": list(best.warnings),
+        },
+        "alternatives": [
+            {"departure_time": ri.departure_time,
+             "duration_minutes": ri.duration_minutes,
+             "fuel_gallons": ri.fuel_gallons}
+            for _, ri in others
+        ],
+    }
+    if best.legs is not None:
+        body_out["best"]["legs"] = best.legs
+
     request.app[LAST_DIAG_KEY].clear()
     request.app[LAST_DIAG_KEY].update({
-        **_result_to_diagnostics(result),
+        "ok": True,
         "wall_time_s": round(wall_s, 4),
+        "candidates_evaluated": len(results),
+        "best_departure_time": best.departure_time,
+        "best_duration_minutes": best.duration_minutes,
         "request": {
             "start": {"lat": start_lat, "lon": start_lon},
             "end": {"lat": end_lat, "lon": end_lon},
-            "optimize": optimize,
-            "departure_time": departure_time,
+            "optimize": "depart_window",
+            "earliest": earliest.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "latest": latest.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "step_minutes": step_minutes,
         },
     })
-
-    log.info("route %s: ok=%s err=%r dist=%.2f wps=%d nodes=%d wall=%.2fs",
-             f"{start_lat:.4f},{start_lon:.4f}->{end_lat:.4f},{end_lon:.4f}",
-             result.ok, result.error,
-             result.distance_nm if result.ok else 0.0,
-             len(result.waypoints), result.nodes_expanded, wall_s)
-
-    return web.json_response(_result_to_public_json(result), status=200)
+    log.debug("depart_window %s: n=%d best=%s dur=%.1fmin wall=%.2fs",
+              f"{start_lat:.4f},{start_lon:.4f}->{end_lat:.4f},{end_lon:.4f}",
+              len(results), best.departure_time,
+              best.duration_minutes or 0.0, wall_s)
+    return web.json_response(body_out, status=200)
 
 
 async def handle_health(request: web.Request) -> web.Response:
@@ -235,7 +431,7 @@ async def handle_health(request: web.Request) -> web.Response:
     if router is None:
         return web.json_response(
             {"ok": False, "graph_loaded": False, "uptime_s": uptime_s,
-             "version": "v1", "error": "graph not loaded"},
+             "version": "v2", "error": "graph not loaded"},
             status=200,
         )
 
@@ -248,7 +444,7 @@ async def handle_health(request: web.Request) -> web.Response:
         "resolution_m": g.resolution_m,
         "depth_threshold_m": g.depth_threshold_m,
         "uptime_s": uptime_s,
-        "version": "v1",
+        "version": "v2",
     }
     return web.json_response(body, status=200)
 

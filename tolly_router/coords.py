@@ -129,6 +129,12 @@ def wgs84_to_utm10n_transformer() -> Transformer:
     return _WGS84_TO_UTM
 
 
+def utm10n_to_wgs84_transformer() -> Transformer:
+    """Return the cached UTM 10N → WGS84 Transformer.  For batch numpy
+    transforms (lon, lat ordering since always_xy=True)."""
+    return _UTM_TO_WGS84
+
+
 def latlon_to_grid(lat: float, lon: float, transform) -> Tuple[int, int]:
     """WGS84 (lat, lon) → integer (row, col) grid cell.
 

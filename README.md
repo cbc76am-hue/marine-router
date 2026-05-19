@@ -148,6 +148,49 @@ in `tolly_router/routing.py` for other scopes.
   or hand off to autopilot. Use the output as a draft you inspect on a
   chartplotter.
 
+## Polar learner
+
+A small background service (`scripts/tolly_polar_learner.py`) listens to
+Signal K for engine + speed data, logs samples to SQLite, and every 30 min
+fits a fuel-rate curve that the routing engine uses for `optimize=time`
+and `optimize=fuel` modes. Designed for the boat: the synthetic engine
+emitter or a real CAN tap → SK → learner — same path either way.
+
+What it produces:
+
+- `~/.cache/marine-router/polar-log.db` — SQLite history (`samples` +
+  `learned_runs`). WAL mode so you can query it live.
+- `~/.cache/marine-router/polar-learned.json` — the active learned polar.
+  Rewritten atomically after each successful fit cycle.
+
+Precedence used by `VesselPolar.load()` (per-key merge, highest wins):
+
+1. `~/.config/marine-router/polar.json` — hand-edited override.
+2. `~/.cache/marine-router/polar-learned.json` — learner output.
+3. Built-in defaults (cruise 14 kt / 28 gph, displacement 7.5 kt / 8 gph).
+
+Inspect the most recent learned run:
+
+```bash
+sqlite3 ~/.cache/marine-router/polar-log.db \
+  "SELECT datetime(ts,'unixepoch'), n_samples,
+          displacement_fuel_gph, cruise_fuel_gph
+   FROM learned_runs ORDER BY ts DESC LIMIT 5"
+
+cat ~/.cache/marine-router/polar-learned.json
+```
+
+Pause / disable the service:
+
+```bash
+systemctl --user stop tolly-polar-learner.service       # one-shot
+systemctl --user disable --now tolly-polar-learner.service  # don't auto-start
+```
+
+The service config lives at `~/.config/marine-router/learner.json`
+(optional — sensible defaults are baked in). The Signal K admin token
+goes in `~/.config/marine-router/sk-token` (mode 600).
+
 ## Used by
 
 - [boat-voice](https://github.com/cbc76am-hue/boat-voice) — a Gemini Live

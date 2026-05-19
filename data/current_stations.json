@@ -1,0 +1,66 @@
+{
+  "_comment": "Curated Salish Sea NOAA CO-OPS tidal-current prediction stations used by tolly_router.currents. Verified 2026-05-18 against https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=currentpredictions and the live datagetter (product=currents_predictions, interval=h). All entries return hourly Velocity_Major (signed knots) with meanFloodDir/meanEbbDir (degrees true). Station IDs in the original brief were checked: PUG1535 (Balch Passage, not Deception Pass), PUG1601 (Hazel Point, not Rosario Strait), PUG1505 (Eagle Harbor, not Admiralty Inlet), PUG1640 (Race Rocks Strait of Juan de Fuca, not San Juan Channel north), PUG1530 (Hale Passage south Puget Sound, not Haro Strait), ACT1851 (Gay Head MA, not Possession Sound), HCB0301 (does not exist) — all replaced below with the correct nearby station for the named area.",
+  "_verified_at": "2026-05-18",
+  "stations": [
+    {
+      "id": "PUG1701",
+      "name": "Deception Pass (Narrows)",
+      "lat": 48.4062,
+      "lon": -122.6431
+    },
+    {
+      "id": "PUG1629",
+      "name": "Yokeko Point, Deception Pass",
+      "lat": 48.4127,
+      "lon": -122.6132
+    },
+    {
+      "id": "PUG1702",
+      "name": "Rosario Strait",
+      "lat": 48.4581,
+      "lon": -122.7501
+    },
+    {
+      "id": "PUG1710",
+      "name": "Hale Passage, east of Lummi Point",
+      "lat": 48.7349,
+      "lon": -122.6802
+    },
+    {
+      "id": "PUG1616",
+      "name": "Admiralty Inlet (off Bush Point)",
+      "lat": 48.0335,
+      "lon": -122.6376
+    },
+    {
+      "id": "PUG1703",
+      "name": "San Juan Channel, south entrance",
+      "lat": 48.461,
+      "lon": -122.952
+    },
+    {
+      "id": "PUG1718",
+      "name": "Haro Strait, 1.2 nm west of Kellett Bluff",
+      "lat": 48.5887,
+      "lon": -123.2258
+    },
+    {
+      "id": "PUG1628",
+      "name": "Skagit Bay channel, SW of Hope Island",
+      "lat": 48.3978,
+      "lon": -122.5796
+    },
+    {
+      "id": "PUG1605",
+      "name": "Possession Sound Entrance",
+      "lat": 47.8993,
+      "lon": -122.3601
+    },
+    {
+      "id": "PUG1603",
+      "name": "Hood Canal Bridge",
+      "lat": 47.8547,
+      "lon": -122.6294
+    }
+  ]
+}
