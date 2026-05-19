@@ -148,6 +148,114 @@ def _result_to_public_json(r: RouteResult) -> Dict[str, Any]:
     return out
 
 
+async def _route_time_multi_leg(
+    router: "Router",
+    start: Tuple[float, float],
+    vias: List[Tuple[float, float, str]],
+    end: Tuple[float, float],
+    departure_time: datetime,
+    optimize: str,
+) -> "RouteResult":
+    """Run route_time per leg (start -> via[0] -> via[1] -> ... -> end),
+    threading each leg's arrival_time forward as the next leg's departure.
+
+    Returns a single combined RouteResult with concatenated waypoints
+    (dropping duplicate boundaries), summed distance/duration/fuel/hazards,
+    union of warnings, and the first leg's auto_exit (Swinomish detection
+    only matters for the origin)."""
+    from .routing import RouteResult
+    legs = [start] + [(lat, lon) for lat, lon, _ in vias] + [end]
+    via_names = [n for _, _, n in vias]
+
+    results: List["RouteResult"] = []
+    current_time = departure_time
+    for i in range(len(legs) - 1):
+        leg_start = legs[i]
+        leg_end = legs[i + 1]
+        r = await asyncio.to_thread(
+            router.route_time, leg_start, leg_end,
+            departure_time=current_time, optimize=optimize,
+        )
+        if not r.ok:
+            # Bail and surface which leg failed.
+            leg_label = (f"start -> {via_names[0]}" if i == 0 and via_names
+                         else f"{via_names[i-1]} -> {via_names[i]}" if i > 0 and i < len(via_names)
+                         else f"{via_names[-1]} -> destination" if via_names
+                         else "start -> destination")
+            r.error = f"leg {i+1}/{len(legs)-1} ({leg_label}) failed: {r.error}"
+            return r
+        results.append(r)
+        # Next leg starts when this leg arrives.
+        if r.arrival_time:
+            current_time = datetime.fromisoformat(
+                r.arrival_time.replace("Z", "+00:00")
+            )
+
+    # Stitch: waypoints concat with boundary dedupe, sums for the totals.
+    combined_wps = list(results[0].waypoints)
+    for leg in results[1:]:
+        # Tag the via waypoint with its name so OpenCPN R&M Manager shows it.
+        if leg.waypoints:
+            # Drop the first waypoint of each subsequent leg (it duplicates
+            # the previous leg's last waypoint at the exact same coord).
+            for j, wp in enumerate(leg.waypoints[1:], start=1):
+                combined_wps.append(wp)
+    # Rename the via boundary waypoints so they're visible on the chart.
+    # Each leg-N start (= prior leg's end, kept as combined_wps[boundary_idx])
+    # gets the via name.
+    boundary_idx = 0
+    for k, leg in enumerate(results[:-1]):
+        boundary_idx += len(leg.waypoints) - (1 if k > 0 else 0)
+        if 0 <= boundary_idx < len(combined_wps) and k < len(via_names):
+            wp = combined_wps[boundary_idx]
+            combined_wps[boundary_idx] = type(wp)(
+                lat=wp.lat, lon=wp.lon, name=f"via: {via_names[k]}")
+
+    total_dist = sum(r.distance_nm for r in results)
+    total_dur = sum((r.duration_minutes or 0.0) for r in results)
+    total_fuel = sum((r.fuel_gallons or 0.0) for r in results)
+    total_haz = sum(r.hazards_near for r in results)
+    total_nodes = sum(r.nodes_expanded for r in results)
+    # Combine warnings; de-dupe identical strings.
+    seen = set()
+    combined_warnings: List[str] = []
+    for r in results:
+        for w in r.warnings:
+            if w not in seen:
+                seen.add(w)
+                combined_warnings.append(w)
+    # Combine legs metadata: prepend a "summary leg" header per segment.
+    combined_legs: List[Any] = []
+    for k, r in enumerate(results):
+        if r.legs:
+            for leg_meta in r.legs:
+                combined_legs.append({
+                    **leg_meta,
+                    "segment": k + 1,
+                    "segment_label": (via_names[k] if k < len(via_names)
+                                       else "destination"),
+                })
+
+    return RouteResult(
+        ok=True,
+        waypoints=combined_wps,
+        distance_nm=total_dist,
+        min_depth_m=None,
+        hazards_near=total_haz,
+        warnings=combined_warnings,
+        error=None,
+        runtime_s=sum(r.runtime_s for r in results),
+        nodes_expanded=total_nodes,
+        optimize_mode=optimize,
+        departure_time=results[0].departure_time,
+        arrival_time=results[-1].arrival_time,
+        duration_minutes=round(total_dur, 2),
+        fuel_gallons=round(total_fuel, 3),
+        legs=combined_legs or None,
+        auto_exit=results[0].auto_exit,  # Swinomish redirect happens on first leg only
+    )
+
+
 def _parse_extras(raw: Any) -> List[Destination]:
     """Coerce a JSON `extra_destinations` array into Destination dataclasses.
 
@@ -294,6 +402,43 @@ async def handle_route(request: web.Request) -> web.Response:
             body.setdefault(
                 "end", {"lat": resolved_dest.lat, "lon": resolved_dest.lon})
 
+    # ---- via destinations ----
+    # Resolve each via name to coords now; reuse the same resolution chain
+    # (builtin + extras + OSM auto-use) we just used for the destination.
+    via_names = body.get("via_destinations") or []
+    via_coords: List[Tuple[float, float, str]] = []
+    if not isinstance(via_names, list):
+        return web.json_response(
+            {"error": "via_destinations must be a list of names"}, status=400)
+    for via_name in via_names:
+        if not isinstance(via_name, str) or not via_name.strip():
+            continue
+        v = gaz.resolve(via_name, extras=extras)
+        if v is not None:
+            via_coords.append((v.lat, v.lon, v.name))
+            continue
+        ext = await asyncio.to_thread(external_lookup, via_name, 5)
+        good = [c for c in ext if c.importance >= EXTERNAL_AUTO_USE_MIN_IMPORTANCE]
+        if len(good) == 1:
+            c = good[0]
+            via_coords.append((c.lat, c.lon, c.short_name))
+            extra_warnings.append(
+                f"via point resolved via OpenStreetMap: "
+                f"{c.short_name} at ({c.lat:.4f}, {c.lon:.4f}) — "
+                "verify on chart"
+            )
+        else:
+            sugg = gaz.suggestions(via_name, k=3, extras=extras)
+            return web.json_response(
+                {"error": f"unknown via point: {via_name!r}",
+                 "suggestions": [s.name for s in sugg],
+                 "external_candidates": [
+                     {"name": c.short_name, "full_name": c.name,
+                      "lat": c.lat, "lon": c.lon}
+                     for c in good[:3]
+                 ]},
+                status=400)
+
     start_name = body.get("start_name")
     if start_name:
         resolved_start = gaz.resolve(start_name, extras=extras)
@@ -376,13 +521,22 @@ async def handle_route(request: web.Request) -> web.Response:
         except ValueError as e:
             return web.json_response(
                 {"error": f"departure_time invalid: {e}"}, status=400)
-        result = await asyncio.to_thread(
-            router.route_time,
-            (start_lat, start_lon),
-            (end_lat, end_lon),
-            departure_time=dt,
-            optimize=optimize,
-        )
+        if via_coords:
+            result = await _route_time_multi_leg(
+                router,
+                (start_lat, start_lon),
+                via_coords,
+                (end_lat, end_lon),
+                dt, optimize,
+            )
+        else:
+            result = await asyncio.to_thread(
+                router.route_time,
+                (start_lat, start_lon),
+                (end_lat, end_lon),
+                departure_time=dt,
+                optimize=optimize,
+            )
         wall_s = time.perf_counter() - t0
         request.app[LAST_DIAG_KEY].clear()
         request.app[LAST_DIAG_KEY].update({
@@ -391,15 +545,16 @@ async def handle_route(request: web.Request) -> web.Response:
             "request": {
                 "start": {"lat": start_lat, "lon": start_lon},
                 "end": {"lat": end_lat, "lon": end_lon},
+                "via": [n for _, _, n in via_coords],
                 "optimize": optimize,
                 "departure_time": dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
         })
         for w in reversed(extra_warnings):
             result.warnings.insert(0, w)
-        log.debug("route %s %s: ok=%s err=%r dist=%.2f dur=%.1fmin "
+        log.debug("route %s %s (vias=%d): ok=%s err=%r dist=%.2f dur=%.1fmin "
                   "wps=%d wall=%.2fs",
-                  optimize,
+                  optimize, len(via_coords),
                   f"{start_lat:.4f},{start_lon:.4f}->{end_lat:.4f},{end_lon:.4f}",
                   result.ok, result.error,
                   result.distance_nm if result.ok else 0.0,
