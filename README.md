@@ -1,26 +1,48 @@
 # marine-router
 
-Chart-aware A* route planning for the Salish Sea (Puget Sound + San Juans, NOAA ENC Region 15).
+Chart-aware route planning for the Salish Sea (Puget Sound + San Juans, NOAA
+ENC Region 15).  Resolves named destinations and computes navigable routes
+that route around land, shallows, and charted hazards.  Designed to power
+voice or chartplotter integrations where a human reviews the route before
+navigating from it — **routes are drafts; this is not a substitute for chart
+inspection or onboard judgment.**
 
-Given a start and a destination on the water, returns a route as a list of (lat, lon)
-waypoints that stays in water ≥8 ft deep, routes around land, and avoids charted
-hazards (rocks, wrecks, restricted areas, submarine cables, traffic separation lanes).
+## Capabilities
 
-Designed to power voice or chartplotter integrations where a human reviews the route
-before navigating from it — **routes are drafts; this is not a substitute for
-chart inspection or onboard judgment.**
+- **Distance-optimal A\*** (`optimize=safe`) — classic shortest-path over
+  the navigability + cost grid.
+- **Time-optimal spatio-temporal A\*** (`optimize=time` / `fuel`) — edge
+  costs are seconds against the live NOAA CO-OPS tidal-current field,
+  using a per-vessel polar (cruise + displacement fuel rates).
+- **Departure-window optimization** (`optimize=depart_window`) — sweeps
+  candidate departure times, returns the best one + alternatives.
+  Parallelized across a process-pool of worker A* engines (3 by default).
+- **Name-based destinations** — built-in 46-entry gazetteer of NOAA-charted
+  harbor entrances + the operator's Signal K waypoints (passed as
+  `extra_destinations`) + OpenStreetMap fallback for marine features
+  outside the curated set.
+- **Multi-leg routing** — `via_destinations` chains legs through named
+  via-points, threading each leg's arrival time forward as the next leg's
+  departure.
+- **Swinomish channel auto-routing** — when start is inside the channel,
+  picks north or south exit by tidal current direction at departure time.
+- **Polar learner** — background SK subscriber fits a real fuel curve from
+  engine CAN data, replacing the configured defaults.
 
 ## Architecture
-
-Five phases, each a separate module:
 
 | Module | Role |
 |---|---|
 | `tolly_router/enc.py` | Walk NOAA S-57 ENC cells; extract LNDARE, DEPARE, DRGARE, UWTROC, OBSTRN, WRECKS, RESARE |
 | `tolly_router/nogo.py` | Per-class buffer + `shapely.ops.unary_union` of no-go polygons |
-| `tolly_router/raster.py` | Rasterize to a 50 m UTM 10N navigability + cost grid |
+| `tolly_router/raster.py` | Rasterize to a 25 m UTM 10N navigability + cost grid |
 | `tolly_router/coords.py` | WGS84 ↔ UTM 10N ↔ grid (row, col) helpers |
-| `tolly_router/routing.py` | Grid A* with corner-cut block + Bresenham-validated Douglas-Peucker simplify |
+| `tolly_router/currents.py` | NOAA CO-OPS tidal-current fetcher + IDW field interpolator |
+| `tolly_router/polar.py` | Vessel speed + fuel model (cruise / displacement) |
+| `tolly_router/routing.py` | Grid A* + spatio-temporal A* + Swinomish-exit picker |
+| `tolly_router/gazetteer.py` | Place-name → coords resolver (builtin + extras + suggestions) |
+| `tolly_router/external_geocode.py` | OSM Nominatim wrapper for non-gazetteer marine features |
+| `tolly_router/worker_pool.py` | ProcessPoolExecutor for parallel depart_window candidates |
 | `tolly_router/service.py` | aiohttp HTTP service on `127.0.0.1:8090` |
 
 ## Quick start
@@ -72,41 +94,65 @@ python3 scripts/build_graph.py --depth-threshold 3.0 \
 
 ## HTTP API contract
 
-`POST /route`
+`POST /route` — full schema (most fields optional):
 
 ```json
 {
-  "start":          {"lat": 48.4045, "lon": -122.5062},
-  "end":            {"lat": 48.5363, "lon": -123.0168},
-  "vessel":         {"draft_m": 0.91, "safety_m": 1.52},   // optional
-  "departure_time": "2026-05-17T09:30:00-07:00",           // accepted, ignored in v1
-  "optimize":       "safe"                                  // v1: only "safe"
+  "destination_name":   "Roche Harbor",
+  "start_name":         "Swinomish North Exit",
+  "start":              {"lat": 48.4045, "lon": -122.5062},
+  "end":                {"lat": 48.5363, "lon": -123.0168},
+  "extra_destinations": [{"name": "fish hole", "lat": 48.55, "lon": -122.95}],
+  "via_destinations":   ["Sucia Island"],
+  "departure_time":     "2026-05-19T18:00:00Z",
+  "optimize":           "time",
+  "depart_window":      {"earliest": "...", "latest": "...", "step_minutes": 15}
 }
 ```
 
-200 success:
+- If `destination_name` is set, it resolves against gazetteer → extras → OSM.
+  Either name OR explicit `end` lat/lon is required.
+- Same for `start_name` / `start`.
+- `optimize`: `safe` | `time` | `fuel` | `depart_window`.
+- `via_destinations` works with `time` and `fuel` (not `depart_window`).
+
+200 success (single route, modes `safe`/`time`/`fuel`):
 ```json
 {
   "ok": true,
-  "waypoints": [{"lat": 48.4045, "lon": -122.5062, "name": "Start"}, ...],
+  "waypoints": [{"lat": ..., "lon": ..., "name": "Start"}, ...],
   "distance_nm": 10.804,
-  "min_depth_m": null,
+  "duration_minutes": 47.2,
+  "fuel_gallons": 23.1,
+  "arrival_time": "2026-05-19T18:47:12Z",
+  "departure_time": "2026-05-19T18:00:00Z",
+  "auto_exit": "north",
   "hazards_near": 2,
-  "warnings": ["..."]
+  "warnings": ["..."],
+  "optimize_mode": "time"
 }
 ```
 
-200 recoverable failure (`ok=false` with a readable error string):
+200 success (`depart_window` mode) — `best` plus stripped `alternatives` list.
+
+200 recoverable failure (`ok=false`):
 - `"destination is not on water"`
-- `"start is in a water basin disconnected from the destination; no route possible at this chart resolution"`
+- `"start is in a water basin disconnected from the destination"`
 - `"coordinates outside routing coverage area"`
 - `"no navigable path found"`
 - `"route distance exceeds 100 nm limit"`
+- `"tidal-current data unavailable: ..."` (offline + cache cold)
 
-400 only for malformed JSON, missing required fields, or `optimize` not in the
-v1 supported set.
+400 with structured error + suggestions:
+```json
+{
+  "error": "unknown destination: 'rosche'",
+  "suggestions": ["Roche Harbor", "Reid Harbor"],
+  "external_candidates": [{"name": "Lopez Pass", "lat": ..., "lon": ...}]
+}
+```
 
-`GET /health` — liveness + graph metadata.
+`GET /health` — liveness + graph metadata + version.
 `POST /reload` — async swap to a freshly-built `data/graph.npz`.
 
 ## Resolution + scope tuning
@@ -132,21 +178,26 @@ in `tolly_router/routing.py` for other scopes.
 
 ## Known limitations
 
-- **Tides ignored.** Depths are at chart datum (MLLW). The service API
-  accepts `departure_time` for forward compatibility; v1 does not consult tide
-  predictions.
+- **Sub-25m channels can't be routed.** Notable casualties: the Ballard
+  Locks + Lake Washington Ship Canal (Salmon Bay → Fremont Cut → Lake
+  Union) are below grid resolution, so destinations past the locks are
+  unreachable from salt water.  Plan to Shilshole and navigate the locks
+  + canal manually.  The Swinomish channel has the same issue but the
+  router auto-handles it by routing from one of the channel exits.
 
-- **Currents ignored.** The router minimizes distance, not time. The Salish
-  Sea has 4-8 kt tidal currents at narrows; a time-optimal route may differ
-  substantially from a distance-optimal route. Current-aware spatio-temporal
-  A* is the planned v2 feature.
+- **Tide heights ignored.** Depths are at chart datum (MLLW). The router
+  consults tidal CURRENTS for time-mode optimization but not tide
+  HEIGHTS — so it won't tell you a passage is closed at low water.
 
 - **Scope is Puget Sound + San Juans** (lon -124.5 to -122.0, lat 47.0 to
-  49.0). Cross-border (US/Canada) routing is out of scope.
+  49.0). Cross-border (US/Canada) routing is out of scope at the graph
+  level, but the gazetteer + external geocoder can resolve names like
+  Bedwell Harbour; routes to BC destinations that exit the scope bbox
+  will return "outside routing coverage area".
 
-- **No autopilot integration.** This service plans routes; it does not steer
-  or hand off to autopilot. Use the output as a draft you inspect on a
-  chartplotter.
+- **No autopilot integration.** This service plans routes; it does not
+  steer or hand off to autopilot. Output is a draft you inspect on a
+  chartplotter before navigating from it.
 
 ## Polar learner
 
@@ -193,14 +244,15 @@ goes in `~/.config/marine-router/sk-token` (mode 600).
 
 ## Used by
 
-- [boat-voice](https://github.com/cbc76am-hue/boat-voice) — a Gemini Live
-  voice assistant for a 1974 Tollycraft 34 — calls this service for
-  chart-aware route planning by name ("plan a route to Friday Harbor").
+- [boat-voice](https://github.com/cbc76am-hue/boat-voice) — a Whisper +
+  Claude + Piper voice assistant for a 1974 Tollycraft 34 — calls this
+  service for chart-aware route planning by name ("plan a route to Friday
+  Harbor with a stop at Sucia").
 
 ## Status
 
-v1, single-developer hobby project. Built against NOAA ENC charts current to
-2026-05. Acceptance suite passes 6/6 (`scripts/route.py --suite`).
+Single-developer hobby project. Built against NOAA ENC charts current to
+2026-05. Acceptance suite at `scripts/route.py --suite`.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, style notes,
 and open work.
 
